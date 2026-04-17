@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod core;
+mod credentials;
 mod fs_source;
 mod index;
 mod scraper;

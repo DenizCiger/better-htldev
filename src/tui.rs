@@ -18,6 +18,7 @@ use ratatui::{
 };
 
 use crate::core::SearchHit;
+use crate::credentials;
 use crate::scraper::{HtlScraper, ScraperEvent};
 use crate::service::{PreviewDocument, SearchService};
 
@@ -40,10 +41,13 @@ struct SetupState {
     active_field: SetupField,
     sync_mode: bool,
     error: Option<String>,
+    saved_accounts: Vec<String>,
+    account_cursor: usize,
 }
 
 #[derive(PartialEq)]
 enum SetupField {
+    AccountList,
     Username,
     Password,
 }
@@ -56,16 +60,32 @@ struct ScrapingState {
     result: Option<Result<(), String>>,
     progress_current: usize,
     progress_total: usize,
+    username: String,
+    password: String,
 }
 
 impl SetupState {
     fn new() -> Self {
+        let saved_accounts = credentials::list().unwrap_or_default();
+        let has_saved = !saved_accounts.is_empty();
+        let (active_field, username, password) = if has_saved {
+            // Start on AccountList so user can pick a saved account
+            (SetupField::AccountList, String::new(), String::new())
+        } else {
+            (
+                SetupField::Username,
+                std::env::var("HTL_USERNAME").unwrap_or_default(),
+                std::env::var("HTL_PASSWORD").unwrap_or_default(),
+            )
+        };
         Self {
-            username: std::env::var("HTL_USERNAME").unwrap_or_default(),
-            password: std::env::var("HTL_PASSWORD").unwrap_or_default(),
-            active_field: SetupField::Username,
+            username,
+            password,
+            active_field,
             sync_mode: false,
             error: None,
+            saved_accounts,
+            account_cursor: 0,
         }
     }
 
@@ -73,6 +93,15 @@ impl SetupState {
         match self.active_field {
             SetupField::Username => &mut self.username,
             SetupField::Password => &mut self.password,
+            SetupField::AccountList => &mut self.username, // unused
+        }
+    }
+
+    /// Fill username + password from the currently highlighted saved account.
+    fn select_saved_account(&mut self) {
+        if let Some(user) = self.saved_accounts.get(self.account_cursor) {
+            self.username = user.clone();
+            self.password = credentials::load_password(user).unwrap_or_default();
         }
     }
 }
@@ -270,49 +299,96 @@ fn handle_search_key(
 }
 
 fn handle_setup_key(key: crossterm::event::KeyEvent, app: &mut App) -> Result<bool> {
-    let Screen::Setup(ref mut state) = app.screen else {
-        return Ok(false);
+    // Extract fields we need without holding a borrow through the match
+    let (active_field, has_saved, n_saved, _cursor, user_empty, pass_empty) = {
+        let Screen::Setup(ref s) = app.screen else {
+            return Ok(false);
+        };
+        let af = match s.active_field {
+            SetupField::AccountList => 0u8,
+            SetupField::Username => 1,
+            SetupField::Password => 2,
+        };
+        (af, !s.saved_accounts.is_empty(), s.saved_accounts.len(), s.account_cursor, s.username.is_empty(), s.password.is_empty())
     };
 
     match key.code {
         KeyCode::Esc => {
             app.screen = Screen::Search;
         }
+
         KeyCode::Tab | KeyCode::Down => {
-            state.active_field = match state.active_field {
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.active_field = match s.active_field {
+                SetupField::AccountList => SetupField::Username,
                 SetupField::Username => SetupField::Password,
-                SetupField::Password => SetupField::Username,
+                SetupField::Password => if has_saved { SetupField::AccountList } else { SetupField::Username },
             };
         }
+
         KeyCode::Up => {
-            state.active_field = match state.active_field {
-                SetupField::Username => SetupField::Password,
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.active_field = match s.active_field {
+                SetupField::AccountList => SetupField::Password,
+                SetupField::Username => if has_saved { SetupField::AccountList } else { SetupField::Password },
                 SetupField::Password => SetupField::Username,
             };
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-            if let Screen::Setup(ref mut s) = app.screen {
-                s.sync_mode = !s.sync_mode;
-            }
+
+        // Navigate saved accounts with left/right
+        KeyCode::Left if active_field == 0 => {
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.account_cursor = s.account_cursor.saturating_sub(1);
         }
+        KeyCode::Right if active_field == 0 => {
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            if s.account_cursor + 1 < n_saved { s.account_cursor += 1; }
+        }
+
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.sync_mode = !s.sync_mode;
+        }
+
+        KeyCode::Enter if active_field == 0 => {
+            // Select the highlighted saved account
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.select_saved_account();
+            s.active_field = SetupField::Username; // show filled fields, let user confirm
+        }
+
         KeyCode::Enter => {
-            let Screen::Setup(ref s) = app.screen else {
-                return Ok(false);
-            };
-            if s.username.is_empty() || s.password.is_empty() {
-                if let Screen::Setup(ref mut s) = app.screen {
-                    s.error = Some("Username and password required.".to_string());
-                }
+            if user_empty || pass_empty {
+                let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+                s.error = Some("Username and password required.".to_string());
                 return Ok(false);
             }
             start_scraping(app);
         }
-        KeyCode::Backspace => {
-            state.active_field_mut().pop();
+
+        KeyCode::Delete if active_field == 0 => {
+            // Delete highlighted saved account from keychain
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            if let Some(user) = s.saved_accounts.get(s.account_cursor).cloned() {
+                let _ = credentials::delete(&user);
+                s.saved_accounts.retain(|a| *a != user);
+                s.account_cursor = s.account_cursor.min(s.saved_accounts.len().saturating_sub(1));
+                if s.saved_accounts.is_empty() {
+                    s.active_field = SetupField::Username;
+                }
+            }
         }
-        KeyCode::Char(ch) => {
-            state.active_field_mut().push(ch);
+
+        KeyCode::Backspace if active_field > 0 => {
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.active_field_mut().pop();
         }
+
+        KeyCode::Char(ch) if active_field > 0 && !key.modifiers.contains(KeyModifiers::ALT) && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
+            s.active_field_mut().push(ch);
+        }
+
         _ => {}
     }
     Ok(false)
@@ -334,9 +410,19 @@ fn handle_scraping_key(
     // Scraping finished — any key reindexes and returns to search
     match key.code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char(_) => {
-            let success = state.result.as_ref().map_or(false, |r| r.is_ok());
+            // Extract needed data before we move app.screen
+            let (success, username, password) = {
+                let Screen::Scraping(ref s) = app.screen else { return Ok(false); };
+                (
+                    s.result.as_ref().map_or(false, |r| r.is_ok()),
+                    s.username.clone(),
+                    s.password.clone(),
+                )
+            };
+
             app.screen = Screen::Search;
             if success {
+                let _ = credentials::save(&username, &password);
                 rebuild_index(service, app)?;
                 app.status = "Scrape complete. Index rebuilt.".to_string();
             } else {
@@ -365,12 +451,15 @@ fn start_scraping(app: &mut App) {
     let (progress_tx, progress_rx) = mpsc::channel::<ScraperEvent>();
     let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
 
+    // Clone for the thread; originals stay in ScrapingState for post-success save
+    let thread_username = username.clone();
+    let thread_password = password.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
             let mut scraper = HtlScraper::new(sync_mode).map_err(|e| e.to_string())?;
             scraper.set_progress_tx(progress_tx);
             scraper
-                .run(&username, &password, true)
+                .run(&thread_username, &thread_password, true)
                 .map_err(|e| e.to_string())
         })();
         let _ = done_tx.send(result);
@@ -384,6 +473,8 @@ fn start_scraping(app: &mut App) {
         result: None,
         progress_current: 0,
         progress_total: 0,
+        username,
+        password,
     });
 }
 
@@ -587,10 +678,16 @@ fn render_status(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
 
 fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
     let area = frame.area();
+    let has_accounts = !state.saved_accounts.is_empty();
 
-    // Center dialog box (60 wide, 12 tall)
+    // Dialog height: base 12 + 1 row per saved account (max 3 shown), +2 for accounts block borders
+    let accounts_block_h = if has_accounts {
+        (state.saved_accounts.len().min(3) as u16) + 2
+    } else {
+        0
+    };
+    let dialog_h = (12 + accounts_block_h).min(area.height);
     let dialog_w = 62u16.min(area.width);
-    let dialog_h = 12u16.min(area.height);
     let dialog = ratatui::layout::Rect {
         x: area.x + (area.width.saturating_sub(dialog_w)) / 2,
         y: area.y + (area.height.saturating_sub(dialog_h)) / 2,
@@ -598,7 +695,6 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
         height: dialog_h,
     };
 
-    // Outer block — render first, then use its inner area for content
     let block = Block::default()
         .title(" HTL.dev Setup ")
         .borders(Borders::ALL)
@@ -606,15 +702,54 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
     let inner_area = block.inner(dialog);
     frame.render_widget(block, dialog);
 
-    // Split the *inner* area (no border overlap)
-    let rows = Layout::vertical([
-        Constraint::Length(3), // username field
-        Constraint::Length(3), // password field
-        Constraint::Length(1), // sync toggle
-        Constraint::Length(1), // error
-        Constraint::Length(1), // help
-    ])
-    .split(inner_area);
+    // Build row constraints dynamically
+    let mut constraints = Vec::new();
+    if has_accounts {
+        constraints.push(Constraint::Length(accounts_block_h)); // saved accounts
+    }
+    constraints.push(Constraint::Length(3)); // username
+    constraints.push(Constraint::Length(3)); // password
+    constraints.push(Constraint::Length(1)); // sync toggle
+    constraints.push(Constraint::Length(1)); // error
+    constraints.push(Constraint::Length(1)); // help
+    let rows = Layout::vertical(constraints).split(inner_area);
+
+    let mut row = 0usize;
+
+    // Saved accounts list
+    if has_accounts {
+        let acct_style = if state.active_field == SetupField::AccountList {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let items: Vec<ListItem> = state
+            .saved_accounts
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                if i == state.account_cursor && state.active_field == SetupField::AccountList {
+                    ListItem::new(Line::from(vec![
+                        Span::styled("▶ ", Style::default().fg(Color::Cyan)),
+                        Span::styled(name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    ]))
+                } else {
+                    ListItem::new(Span::styled(
+                        format!("  {name}"),
+                        Style::default().fg(Color::Gray),
+                    ))
+                }
+            })
+            .collect();
+        let accounts_list = List::new(items).block(
+            Block::default()
+                .title(" Saved accounts  [←→] select  [Enter] use  [Del] remove ")
+                .borders(Borders::ALL)
+                .border_style(acct_style),
+        );
+        frame.render_widget(accounts_list, rows[row]);
+        row += 1;
+    }
 
     // Username field
     let user_style = if state.active_field == SetupField::Username {
@@ -629,8 +764,10 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
                 .borders(Borders::ALL)
                 .border_style(user_style),
         ),
-        rows[0],
+        rows[row],
     );
+    let user_row = rows[row];
+    row += 1;
 
     // Password field (masked)
     let pass_style = if state.active_field == SetupField::Password {
@@ -646,8 +783,10 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
                 .borders(Borders::ALL)
                 .border_style(pass_style),
         ),
-        rows[1],
+        rows[row],
     );
+    let pass_row = rows[row];
+    row += 1;
 
     // Sync toggle
     let sync_label = if state.sync_mode {
@@ -655,29 +794,34 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
     } else {
         Span::styled("[ ] Sync mode", Style::default().fg(Color::DarkGray))
     };
-    frame.render_widget(Paragraph::new(Line::from(sync_label)), rows[2]);
+    frame.render_widget(Paragraph::new(Line::from(sync_label)), rows[row]);
+    row += 1;
 
     // Error
     if let Some(ref err) = state.error {
         frame.render_widget(
             Paragraph::new(Span::styled(err.as_str(), Style::default().fg(Color::Red))),
-            rows[3],
+            rows[row],
         );
     }
+    row += 1;
 
-    // Help line
+    // Help
+    let help = if has_accounts {
+        "[Tab/↑↓] switch  [Alt+S] sync  [Enter] start  [Esc] cancel"
+    } else {
+        "[Tab] switch  [Alt+S] sync  [Enter] start  [Esc] cancel"
+    };
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "[Tab] switch  [Alt+S] sync  [Enter] start  [Esc] cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-        rows[4],
+        Paragraph::new(Span::styled(help, Style::default().fg(Color::DarkGray))),
+        rows[row],
     );
 
-    // Cursor inside active field (field content starts at x+1, y+1 due to border)
+    // Cursor
     let (cx, cy) = match state.active_field {
-        SetupField::Username => (rows[0].x + 1 + state.username.len() as u16, rows[0].y + 1),
-        SetupField::Password => (rows[1].x + 1 + state.password.len() as u16, rows[1].y + 1),
+        SetupField::AccountList => return, // no text cursor in list mode
+        SetupField::Username => (user_row.x + 1 + state.username.len() as u16, user_row.y + 1),
+        SetupField::Password => (pass_row.x + 1 + state.password.len() as u16, pass_row.y + 1),
     };
     if cx < inner_area.x + inner_area.width {
         frame.set_cursor_position((cx, cy));
