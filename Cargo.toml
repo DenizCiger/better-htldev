@@ -1,0 +1,18 @@
+[package]
+name = "htldev"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.100"
+blake3 = "1.8.2"
+clap = { version = "4.6.1", features = ["derive"] }
+crossterm = "0.29.0"
+globset = "0.4.18"
+ratatui = "0.30.0"
+regex = "1.12.2"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.23.0"
