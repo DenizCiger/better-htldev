@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
 };
 
 use crate::core::SearchHit;
@@ -24,6 +24,19 @@ use crate::service::{PreviewDocument, SearchService};
 
 const SEARCH_LIMIT: usize = 50;
 const DEBOUNCE_MS: u64 = 150;
+
+// TokyoNight Storm palette
+const BG: Color = Color::Rgb(31, 35, 53);
+const SURFACE: Color = Color::Rgb(36, 40, 59);
+const BORDER: Color = Color::Rgb(59, 66, 97);
+const MUTED: Color = Color::Rgb(86, 95, 137);
+const FG: Color = Color::Rgb(192, 202, 245);
+const BLUE: Color = Color::Rgb(122, 162, 247);
+const CYAN: Color = Color::Rgb(125, 207, 255);
+const GREEN: Color = Color::Rgb(158, 206, 106);
+const YELLOW: Color = Color::Rgb(224, 175, 104);
+const RED: Color = Color::Rgb(247, 118, 142);
+const PURPLE: Color = Color::Rgb(187, 154, 247);
 
 // ---------------------------------------------------------------------------
 // Screen state
@@ -69,7 +82,6 @@ impl SetupState {
         let saved_accounts = credentials::list().unwrap_or_default();
         let has_saved = !saved_accounts.is_empty();
         let (active_field, username, password) = if has_saved {
-            // Start on AccountList so user can pick a saved account
             (SetupField::AccountList, String::new(), String::new())
         } else {
             (
@@ -93,11 +105,10 @@ impl SetupState {
         match self.active_field {
             SetupField::Username => &mut self.username,
             SetupField::Password => &mut self.password,
-            SetupField::AccountList => &mut self.username, // unused
+            SetupField::AccountList => &mut self.username,
         }
     }
 
-    /// Fill username + password from the currently highlighted saved account.
     fn select_saved_account(&mut self) {
         if let Some(user) = self.saved_accounts.get(self.account_cursor) {
             self.username = user.clone();
@@ -197,7 +208,6 @@ pub fn run(service: SearchService) -> Result<()> {
     loop {
         terminal.draw(|frame| render(frame, &app))?;
 
-        // Poll scraping channel
         if let Screen::Scraping(ref mut state) = app.screen {
             while let Ok(event) = state.rx.try_recv() {
                 match event {
@@ -299,7 +309,6 @@ fn handle_search_key(
 }
 
 fn handle_setup_key(key: crossterm::event::KeyEvent, app: &mut App) -> Result<bool> {
-    // Extract fields we need without holding a borrow through the match
     let (active_field, has_saved, n_saved, _cursor, user_empty, pass_empty) = {
         let Screen::Setup(ref s) = app.screen else {
             return Ok(false);
@@ -335,7 +344,6 @@ fn handle_setup_key(key: crossterm::event::KeyEvent, app: &mut App) -> Result<bo
             };
         }
 
-        // Navigate saved accounts with left/right
         KeyCode::Left if active_field == 0 => {
             let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
             s.account_cursor = s.account_cursor.saturating_sub(1);
@@ -351,10 +359,9 @@ fn handle_setup_key(key: crossterm::event::KeyEvent, app: &mut App) -> Result<bo
         }
 
         KeyCode::Enter if active_field == 0 => {
-            // Select the highlighted saved account
             let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
             s.select_saved_account();
-            s.active_field = SetupField::Username; // show filled fields, let user confirm
+            s.active_field = SetupField::Username;
         }
 
         KeyCode::Enter => {
@@ -367,7 +374,6 @@ fn handle_setup_key(key: crossterm::event::KeyEvent, app: &mut App) -> Result<bo
         }
 
         KeyCode::Delete if active_field == 0 => {
-            // Delete highlighted saved account from keychain
             let Screen::Setup(ref mut s) = app.screen else { return Ok(false); };
             if let Some(user) = s.saved_accounts.get(s.account_cursor).cloned() {
                 let _ = credentials::delete(&user);
@@ -404,13 +410,11 @@ fn handle_scraping_key(
     };
 
     if !state.done {
-        return Ok(false); // ignore keys while running
+        return Ok(false);
     }
 
-    // Scraping finished — any key reindexes and returns to search
     match key.code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char(_) => {
-            // Extract needed data before we move app.screen
             let (success, username, password) = {
                 let Screen::Scraping(ref s) = app.screen else { return Ok(false); };
                 (
@@ -451,7 +455,6 @@ fn start_scraping(app: &mut App) {
     let (progress_tx, progress_rx) = mpsc::channel::<ScraperEvent>();
     let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
 
-    // Clone for the thread; originals stay in ScrapingState for post-success save
     let thread_username = username.clone();
     let thread_password = password.clone();
     std::thread::spawn(move || {
@@ -566,6 +569,11 @@ fn open_in_browser(app: &mut App) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
+    // Fill background
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG)),
+        frame.area(),
+    );
     match &app.screen {
         Screen::Search => render_search(frame, app),
         Screen::Setup(state) => render_setup(frame, state),
@@ -599,24 +607,34 @@ fn render_search(frame: &mut ratatui::Frame<'_>, app: &App) {
 }
 
 fn render_query(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &App) {
-    let paragraph = Paragraph::new(app.query.as_str()).block(
+    let paragraph = Paragraph::new(Line::from(vec![
+        Span::styled("> ", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+        Span::styled(app.query.as_str(), Style::default().fg(FG)),
+    ]))
+    .block(
         Block::default()
-            .title(" Search ")
+            .title(Span::styled(" Search ", Style::default().fg(MUTED)))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(BLUE))
+            .style(Style::default().bg(SURFACE)),
     );
     frame.render_widget(paragraph, area);
 
-    let cursor_x = area.x + 1 + app.query.len() as u16;
+    // cursor after "> " prefix (2 chars) + query length
+    let cursor_x = area.x + 1 + 2 + app.query.len() as u16;
     let cursor_y = area.y + 1;
-    if cursor_x < area.x + area.width - 1 {
+    if cursor_x < area.x + area.width.saturating_sub(1) {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
 
 fn render_results(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &App) {
     let items: Vec<ListItem> = if app.results.is_empty() {
-        vec![ListItem::new(Line::raw("No results"))]
+        vec![ListItem::new(Line::from(Span::styled(
+            "  no results",
+            Style::default().fg(MUTED),
+        )))]
     } else {
         app.results
             .iter()
@@ -624,15 +642,28 @@ fn render_results(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, a
             .collect()
     };
 
-    let results_title = if app.results.is_empty() {
+    let title = if app.results.is_empty() {
         " Results ".to_string()
     } else {
         format!(" Results ({}) ", app.results.len())
     };
+
     let list = List::new(items)
-        .block(Block::default().title(results_title).borders(Borders::ALL))
-        .highlight_style(Style::default().bg(Color::Rgb(30, 30, 60)))
-        .highlight_symbol(">> ");
+        .block(
+            Block::default()
+                .title(Span::styled(title, Style::default().fg(MUTED)))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(BORDER))
+                .style(Style::default().bg(BG)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(35, 56, 92))
+                .fg(FG)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
 
     let mut list_state = ratatui::widgets::ListState::default();
     if !app.results.is_empty() {
@@ -643,44 +674,86 @@ fn render_results(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, a
 
 fn render_preview(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &App) {
     let lines: Vec<Line> = match &app.preview {
-        None => vec![Line::raw("No document selected.")],
+        None => vec![Line::from(Span::styled(
+            "  no document selected",
+            Style::default().fg(MUTED),
+        ))],
         Some(preview) => {
-            let mut v = vec![
-                Line::from(Span::styled(
+            let total = preview.body_lines.len();
+            let gutter_w = total.to_string().len().max(3);
+
+            let mut v: Vec<Line> = Vec::new();
+
+            // File path header
+            let gutter_pad = " ".repeat(gutter_w + 1); // gutter + trailing space
+            v.push(Line::from(vec![
+                Span::styled(gutter_pad, Style::default().fg(MUTED)),
+                Span::styled(
                     preview.path.as_str(),
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::raw(""),
-            ];
-            for line in &preview.body_lines {
-                v.push(highlight_line(line, &app.query));
+                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            v.push(Line::raw(""));
+
+            for (i, line_text) in preview.body_lines.iter().enumerate() {
+                let num_str = format!("{:>width$} ", i + 1, width = gutter_w);
+                let content = highlight_line(line_text, &app.query);
+                let mut spans = vec![
+                    Span::styled(num_str, Style::default().fg(MUTED)),
+                ];
+                spans.extend(content.spans);
+                v.push(Line::from(spans));
             }
             v
         }
     };
 
     let widget = Paragraph::new(lines)
-        .block(Block::default().title(" Preview ").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(Span::styled(" Preview ", Style::default().fg(MUTED)))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(BORDER))
+                .style(Style::default().bg(BG)),
+        )
         .scroll((app.preview_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(widget, area);
 }
 
 fn render_status(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &App) {
-    let line = if app.status.is_empty() {
-        let help = "[↑↓] select  [Enter] open  [Shift+Enter] browser  [Tab] preview  [PgUp/Dn] scroll  [Alt+R] reindex  [Alt+S] scrape  [Esc] clear  [Ctrl+C] quit";
-        Line::from(Span::styled(help, Style::default().fg(Color::DarkGray)))
+    let text = if !app.status.is_empty() {
+        app.status.clone()
+    } else if !app.query.is_empty() {
+        format!("/{}", app.query)
     } else {
-        Line::from(Span::styled(app.status.as_str(), Style::default().fg(Color::Yellow)))
+        "[↑↓] navigate  [Enter] open  [Shift+Enter] browser  [Tab] preview  [PgUp/Dn] scroll  [Alt+R] reindex  [Alt+S] scrape  [Esc] clear".to_string()
     };
-    frame.render_widget(Paragraph::new(line), area);
+
+    let style = if !app.status.is_empty() {
+        Style::default().fg(YELLOW).bg(BG)
+    } else {
+        Style::default().fg(MUTED).bg(BG)
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(text, style))),
+        area,
+    );
 }
 
 fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
+    // Clear background for floating modal effect
+    frame.render_widget(Clear, frame.area());
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG)),
+        frame.area(),
+    );
+
     let area = frame.area();
     let has_accounts = !state.saved_accounts.is_empty();
 
-    // Dialog height: base 12 + 1 row per saved account (max 3 shown), +2 for accounts block borders
     let accounts_block_h = if has_accounts {
         (state.saved_accounts.len().min(3) as u16) + 2
     } else {
@@ -696,32 +769,35 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
     };
 
     let block = Block::default()
-        .title(" HTL.dev Setup ")
+        .title(Span::styled(
+            " HTL.dev Setup ",
+            Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(PURPLE))
+        .style(Style::default().bg(SURFACE));
     let inner_area = block.inner(dialog);
     frame.render_widget(block, dialog);
 
-    // Build row constraints dynamically
     let mut constraints = Vec::new();
     if has_accounts {
-        constraints.push(Constraint::Length(accounts_block_h)); // saved accounts
+        constraints.push(Constraint::Length(accounts_block_h));
     }
-    constraints.push(Constraint::Length(3)); // username
-    constraints.push(Constraint::Length(3)); // password
-    constraints.push(Constraint::Length(1)); // sync toggle
-    constraints.push(Constraint::Length(1)); // error
-    constraints.push(Constraint::Length(1)); // help
+    constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Length(1));
     let rows = Layout::vertical(constraints).split(inner_area);
 
     let mut row = 0usize;
 
-    // Saved accounts list
     if has_accounts {
-        let acct_style = if state.active_field == SetupField::AccountList {
-            Style::default().fg(Color::Cyan)
+        let acct_border = if state.active_field == SetupField::AccountList {
+            BLUE
         } else {
-            Style::default().fg(Color::Gray)
+            BORDER
         };
         let items: Vec<ListItem> = state
             .saved_accounts
@@ -730,58 +806,59 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
             .map(|(i, name)| {
                 if i == state.account_cursor && state.active_field == SetupField::AccountList {
                     ListItem::new(Line::from(vec![
-                        Span::styled("▶ ", Style::default().fg(Color::Cyan)),
-                        Span::styled(name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled("▶ ", Style::default().fg(BLUE)),
+                        Span::styled(
+                            name.as_str(),
+                            Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                        ),
                     ]))
                 } else {
                     ListItem::new(Span::styled(
                         format!("  {name}"),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(MUTED),
                     ))
                 }
             })
             .collect();
         let accounts_list = List::new(items).block(
             Block::default()
-                .title(" Saved accounts  [←→] select  [Enter] use  [Del] remove ")
+                .title(Span::styled(
+                    " Saved accounts  [←→] select  [Enter] use  [Del] remove ",
+                    Style::default().fg(MUTED),
+                ))
                 .borders(Borders::ALL)
-                .border_style(acct_style),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(acct_border)),
         );
         frame.render_widget(accounts_list, rows[row]);
         row += 1;
     }
 
-    // Username field
-    let user_style = if state.active_field == SetupField::Username {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
+    // Username
+    let user_border = if state.active_field == SetupField::Username { BLUE } else { BORDER };
     frame.render_widget(
         Paragraph::new(state.username.as_str()).block(
             Block::default()
-                .title(" Username ")
+                .title(Span::styled(" Username ", Style::default().fg(MUTED)))
                 .borders(Borders::ALL)
-                .border_style(user_style),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(user_border)),
         ),
         rows[row],
     );
     let user_row = rows[row];
     row += 1;
 
-    // Password field (masked)
-    let pass_style = if state.active_field == SetupField::Password {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
+    // Password
+    let pass_border = if state.active_field == SetupField::Password { BLUE } else { BORDER };
     let masked: String = "*".repeat(state.password.len());
     frame.render_widget(
         Paragraph::new(masked.as_str()).block(
             Block::default()
-                .title(" Password ")
+                .title(Span::styled(" Password ", Style::default().fg(MUTED)))
                 .borders(Borders::ALL)
-                .border_style(pass_style),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(pass_border)),
         ),
         rows[row],
     );
@@ -790,9 +867,12 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
 
     // Sync toggle
     let sync_label = if state.sync_mode {
-        Span::styled("[x] Sync mode", Style::default().fg(Color::Green))
+        Span::styled(
+            "[x] Sync mode (incremental)",
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+        )
     } else {
-        Span::styled("[ ] Sync mode", Style::default().fg(Color::DarkGray))
+        Span::styled("[ ] Sync mode (incremental)", Style::default().fg(MUTED))
     };
     frame.render_widget(Paragraph::new(Line::from(sync_label)), rows[row]);
     row += 1;
@@ -800,7 +880,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
     // Error
     if let Some(ref err) = state.error {
         frame.render_widget(
-            Paragraph::new(Span::styled(err.as_str(), Style::default().fg(Color::Red))),
+            Paragraph::new(Span::styled(err.as_str(), Style::default().fg(RED))),
             rows[row],
         );
     }
@@ -813,13 +893,13 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
         "[Tab] switch  [Alt+S] sync  [Enter] start  [Esc] cancel"
     };
     frame.render_widget(
-        Paragraph::new(Span::styled(help, Style::default().fg(Color::DarkGray))),
+        Paragraph::new(Span::styled(help, Style::default().fg(MUTED))),
         rows[row],
     );
 
     // Cursor
     let (cx, cy) = match state.active_field {
-        SetupField::AccountList => return, // no text cursor in list mode
+        SetupField::AccountList => return,
         SetupField::Username => (user_row.x + 1 + state.username.len() as u16, user_row.y + 1),
         SetupField::Password => (pass_row.x + 1 + state.password.len() as u16, pass_row.y + 1),
     };
@@ -830,20 +910,19 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, state: &SetupState) {
 
 fn render_scraping(frame: &mut ratatui::Frame<'_>, state: &ScrapingState) {
     let layout = Layout::vertical([
-        Constraint::Min(5),   // log area
-        Constraint::Length(3), // progress bar
-        Constraint::Length(1), // status line
+        Constraint::Min(5),
+        Constraint::Length(3),
+        Constraint::Length(1),
     ])
     .split(frame.area());
 
-    let border_color = if state.done { Color::Green } else { Color::Yellow };
+    let border_color = if state.done { GREEN } else { YELLOW };
     let title = if state.done {
         " Scraping — Done! Press any key to continue "
     } else {
         " Scraping in progress… "
     };
 
-    // Log lines — show the most recent lines that fit
     let log_height = layout[0].height.saturating_sub(2) as usize;
     let lines: Vec<Line> = state
         .lines
@@ -853,11 +932,11 @@ fn render_scraping(frame: &mut ratatui::Frame<'_>, state: &ScrapingState) {
         .rev()
         .map(|l| {
             let style = if l.starts_with("[OK]") || l.starts_with("DONE") {
-                Style::default().fg(Color::Green)
+                Style::default().fg(GREEN)
             } else if l.starts_with("[ERROR]") || l.starts_with("[WARN]") {
-                Style::default().fg(Color::Red)
+                Style::default().fg(RED)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(FG)
             };
             Line::from(Span::styled(l.as_str(), style))
         })
@@ -866,51 +945,57 @@ fn render_scraping(frame: &mut ratatui::Frame<'_>, state: &ScrapingState) {
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
-                .title(title)
+                .title(Span::styled(title, Style::default().fg(border_color)))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
+                .style(Style::default().bg(BG)),
         ),
         layout[0],
     );
 
-    // Progress bar
     let (ratio, label) = if state.done {
         (1.0f64, "Complete".to_string())
     } else if state.progress_total > 0 {
         let pct = state.progress_current as f64 / state.progress_total as f64;
-        (
-            pct,
-            format!("{}/{} files", state.progress_current, state.progress_total),
-        )
+        (pct, format!("{}/{} files", state.progress_current, state.progress_total))
     } else {
         (0.0, "Waiting…".to_string())
     };
 
-    let gauge_color = if state.done { Color::Green } else { Color::Cyan };
+    let gauge_color = if state.done { GREEN } else { BLUE };
     let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title(" Progress "))
-        .gauge_style(Style::default().fg(gauge_color))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(BORDER))
+                .title(Span::styled(" Progress ", Style::default().fg(MUTED))),
+        )
+        .gauge_style(Style::default().fg(gauge_color).bg(SURFACE))
         .ratio(ratio.clamp(0.0, 1.0))
-        .label(label);
+        .label(Span::styled(
+            label,
+            Style::default().fg(FG).add_modifier(Modifier::BOLD),
+        ));
     frame.render_widget(gauge, layout[1]);
 
-    // Status line
     let status = if state.done {
         match &state.result {
             Some(Ok(())) => Line::from(Span::styled(
                 "Scrape successful. Press any key to reindex and return.",
-                Style::default().fg(Color::Green),
+                Style::default().fg(GREEN),
             )),
             Some(Err(e)) => Line::from(Span::styled(
                 format!("Scrape failed: {e}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(RED),
             )),
             None => Line::raw(""),
         }
     } else {
         Line::from(Span::styled(
             "Scraping…  [Ctrl+C] force quit",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(MUTED),
         ))
     };
     frame.render_widget(Paragraph::new(status), layout[2]);
@@ -924,10 +1009,10 @@ fn path_spans(path: &str) -> Vec<Span<'_>> {
     let sep = if path.contains('/') { '/' } else { '\\' };
     match path.rfind(sep) {
         Some(i) => vec![
-            Span::styled(&path[..=i], Style::default().fg(Color::DarkGray)),
-            Span::raw(&path[i + 1..]),
+            Span::styled(&path[..=i], Style::default().fg(MUTED)),
+            Span::styled(&path[i + 1..], Style::default().fg(FG)),
         ],
-        None => vec![Span::raw(path)],
+        None => vec![Span::styled(path, Style::default().fg(FG))],
     }
 }
 
@@ -939,7 +1024,7 @@ fn highlight_line<'a>(text: &'a str, query: &str) -> Line<'a> {
         .collect();
 
     if tokens.is_empty() {
-        return Line::from(Span::raw(text));
+        return Line::from(Span::styled(text, Style::default().fg(FG)));
     }
 
     let lower = text.to_lowercase();
@@ -955,7 +1040,7 @@ fn highlight_line<'a>(text: &'a str, query: &str) -> Line<'a> {
     }
 
     if matches.is_empty() {
-        return Line::from(Span::raw(text));
+        return Line::from(Span::styled(text, Style::default().fg(FG)));
     }
 
     matches.sort_unstable();
@@ -971,20 +1056,21 @@ fn highlight_line<'a>(text: &'a str, query: &str) -> Line<'a> {
     }
 
     let highlight = Style::default()
-        .fg(Color::Yellow)
+        .fg(YELLOW)
+        .bg(Color::Rgb(58, 45, 20))
         .add_modifier(Modifier::BOLD);
 
     let mut spans = Vec::new();
     let mut cursor = 0usize;
     for (s, e) in merged {
         if cursor < s {
-            spans.push(Span::raw(&text[cursor..s]));
+            spans.push(Span::styled(&text[cursor..s], Style::default().fg(FG)));
         }
         spans.push(Span::styled(&text[s..e], highlight));
         cursor = e;
     }
     if cursor < text.len() {
-        spans.push(Span::raw(&text[cursor..]));
+        spans.push(Span::styled(&text[cursor..], Style::default().fg(FG)));
     }
 
     Line::from(spans)

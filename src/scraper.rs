@@ -398,7 +398,6 @@ impl HtlScraper {
 
             self.send_progress(i + 1, total);
             if (i + 1) % 10 == 0 || i + 1 == total {
-                self.log(format!("  Progress: {}/{} ({}%)", i + 1, total, (i + 1) * 100 / total));
                 let _ = self.save_state();
             }
         }
@@ -468,7 +467,6 @@ impl HtlScraper {
                 self.state.downloaded_assets.insert(asset_url.clone());
             }
             if (i + 1) % 20 == 0 || i + 1 == total {
-                self.log(format!("  Assets: {}/{} ({}%)", i + 1, total, (i + 1) * 100 / total));
                 let _ = self.save_state();
             }
         }
