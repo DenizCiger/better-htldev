@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use crate::cli::{Cli, Command as CliCommand};
 use crate::core::{SearchHit, SearchMode, SearchQuery, default_source_path};
 use crate::fs_source::FilesystemSource;
+use crate::scraper::HtlScraper;
 use crate::service::SearchService;
 use crate::tui;
 
@@ -47,6 +48,27 @@ pub fn run(cli: Cli) -> Result<()> {
             let source = cli.source.unwrap_or_else(default_source_path);
             let service = SearchService::new(source, cli.index_db);
             tui::run(service)
+        }
+        CliCommand::Scrape(args) => {
+            let username = args
+                .username
+                .or_else(|| std::env::var("HTL_USERNAME").ok())
+                .unwrap_or_else(|| {
+                    eprint!("HTL username: ");
+                    let mut s = String::new();
+                    std::io::stdin().read_line(&mut s).ok();
+                    s.trim().to_string()
+                });
+
+            let password = args
+                .password
+                .or_else(|| std::env::var("HTL_PASSWORD").ok())
+                .unwrap_or_else(|| {
+                    rpassword::prompt_password("HTL password: ").unwrap_or_default()
+                });
+
+            let scraper = HtlScraper::new(args.sync)?;
+            scraper.run(&username, &password, !args.fresh)
         }
     }
 }

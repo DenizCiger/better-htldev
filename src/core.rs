@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-pub const DEFAULT_SOURCE_STR: &str =
-    r"C:\Users\Deniz\Documents\School\WMC\htl-dev-scraper\htl_dev_backup\md";
-pub const DEFAULT_INDEX_DIR: &str = ".htldev";
-pub const DEFAULT_INDEX_FILE: &str = "index.sqlite3";
+pub fn app_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .expect("could not determine AppData directory")
+        .join("htldev")
+}
 const PERMISSION_DENIED_PREFIX: &str =
     "Error parsing markdown: Error: You do not have the required permissions to view this content.";
 
@@ -77,11 +78,11 @@ pub struct LineMatch {
 }
 
 pub fn default_source_path() -> PathBuf {
-    PathBuf::from(DEFAULT_SOURCE_STR)
+    app_data_dir().join("md")
 }
 
 pub fn default_index_path() -> PathBuf {
-    PathBuf::from(DEFAULT_INDEX_DIR).join(DEFAULT_INDEX_FILE)
+    app_data_dir().join("index.sqlite3")
 }
 
 pub fn display_path_from_rel(rel_path: &Path) -> String {

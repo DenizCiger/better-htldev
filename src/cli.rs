@@ -35,6 +35,7 @@ pub enum Command {
     Open(TargetArgs),
     Doctor,
     Tui,
+    Scrape(ScrapeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -59,6 +60,18 @@ pub struct SearchArgs {
 pub struct TargetArgs {
     #[arg(value_name = "DOC")]
     pub target: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ScrapeArgs {
+    #[arg(long, help = "Re-check all files for updates")]
+    pub sync: bool,
+    #[arg(long, help = "Delete state and re-download everything")]
+    pub fresh: bool,
+    #[arg(long, value_name = "USER", help = "HTL username (or set HTL_USERNAME env var)")]
+    pub username: Option<String>,
+    #[arg(long, value_name = "PASS", help = "HTL password (or set HTL_PASSWORD env var)")]
+    pub password: Option<String>,
 }
 
 impl Cli {

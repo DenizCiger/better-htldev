@@ -3,6 +3,7 @@ mod cli;
 mod core;
 mod fs_source;
 mod index;
+mod scraper;
 mod service;
 mod tui;
 
