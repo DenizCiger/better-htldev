@@ -4,33 +4,14 @@ Offline-first search CLI for htl.dev — scrape, index, and search your school's
 
 ## Install
 
-**Linux (x64)**
+**Linux / macOS**
 ```sh
-curl -LO https://github.com/DenizCiger/better-htldev/releases/latest/download/htldev-x86_64-unknown-linux-gnu.tar.xz
-tar -xf htldev-x86_64-unknown-linux-gnu.tar.xz
-sudo mv htldev /usr/local/bin/
-```
-
-**macOS (Apple Silicon)**
-```sh
-curl -LO https://github.com/DenizCiger/better-htldev/releases/latest/download/htldev-aarch64-apple-darwin.tar.xz
-tar -xf htldev-aarch64-apple-darwin.tar.xz
-sudo mv htldev /usr/local/bin/
-```
-
-**macOS (Intel)**
-```sh
-curl -LO https://github.com/DenizCiger/better-htldev/releases/latest/download/htldev-x86_64-apple-darwin.tar.xz
-tar -xf htldev-x86_64-apple-darwin.tar.xz
-sudo mv htldev /usr/local/bin/
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/DenizCiger/better-htldev/releases/latest/download/htldev-installer.sh | sh
 ```
 
 **Windows (PowerShell)**
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/DenizCiger/better-htldev/releases/latest/download/htldev-x86_64-pc-windows-msvc.zip" -OutFile "htldev.zip"
-Expand-Archive htldev.zip -DestinationPath "$env:USERPROFILE\.htldev"
-$env:PATH += ";$env:USERPROFILE\.htldev"
-[Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$env:USERPROFILE\.htldev", "User")
+irm https://github.com/DenizCiger/better-htldev/releases/latest/download/htldev-installer.ps1 | iex
 ```
 
 Restart your terminal, then verify with `htldev --version`.
