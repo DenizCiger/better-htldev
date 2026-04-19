@@ -2,6 +2,9 @@
 name = "htldev"
 version = "0.1.0"
 edition = "2021"
+description = "Search and browse HTL.dev documentation from the terminal"
+license = "MIT"
+repository = "https://github.com/DenizCiger/better-htldev"
 
 [dependencies]
 anyhow = "1.0.100"
@@ -24,3 +27,8 @@ walkdir = "2.5.0"
 
 [dev-dependencies]
 tempfile = "3.23.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

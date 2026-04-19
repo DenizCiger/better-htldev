@@ -59,7 +59,7 @@ impl HtlScraper {
         let client = reqwest::blocking::Client::builder()
             .cookie_provider(jar)
             .timeout(Duration::from_secs(30))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .user_agent("Mozilla/5.0 AppleWebKit/537.36")
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .context("build HTTP client")?;
